@@ -5,26 +5,94 @@ date: "October 25, 2017"
 output: html_document
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+## Load and clean the data:
+```{r, echo=TRUE}
+library(caret)
+training <- read.csv("pml-training.csv")
+testing <- read.csv("pml-testing.csv")
+
+# Delete columns that contain more than 95% NAs or blanks
+n <- nrow(training)
+training.n <- training
+for (v in names(training)) {
+   if( sum(is.na(training[, v]))/n > 0.95 | sum(training[, v]=="")/n > 0.95)
+       training.n[, v] <- NULL
+}
+training <- training.n
+
+# delete the first six columns because they should not be relevant to the response classes 
+training[, 1:6]=NULL 
 ```
 
-## R Markdown
+## Explore the data
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r cars}
-summary(cars)
+### Visualize the data
+```{r, fig.align="center", fig.width=10, fig.height=6, echo=TRUE}
+featurePlot(training[, -54], y=training$classe)
+hist(training$gyros_belt_x)
+qplot(gyros_belt_x, colour=classe, data=training, geom="density")
 ```
 
-## Including Plots
+Shown above are just some examples of data exploration. No obvious patterns can be observed that suggest some relationship between any predictor and the response classes.
 
-You can also embed plots, for example:
-
-```{r pressure, echo=FALSE}
-plot(pressure)
+### check correlations between predictors
+```{r, echo=TRUE}
+M <- abs(cor(training[,-54]))
+diag(M) <- 0
+cbind(which(M>0.8, arr.ind=T), cor=M[which(M>0.8, arr.ind=T)])
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+It can be seen that some predictors are highly correlated.
+
+## Training the data with tree-based models
+Since the dependent variable is a category variable, tree-based models are tested to train the data.
+
+### Try rpart modeling. k-fold (k=3) cross-validation is used in data training
+```{r, echo=TRUE}
+library(caret)
+set.seed(12345)
+mdl.rpart1 <- train(classe ~ ., data=training, method="rpart", trControl=trainControl(method = "cv", number = 3))
+#plot(mdl.rpart1$finalModel)
+#text(mdl.rpart1$finalModel, use.n=TRUE, all=TRUE, cex=.8)
+mdl.rpart1$results
+```
+
+The results of this modeling are quite poor. The highest accuracy is only 0.54.
+
+Because some predictors are highly correlated, it may be helpful to have the data preprocessed with pca:
+```{r, echo=TRUE}
+set.seed(12345)
+mdl.rpart2 <- train(classe ~ ., data=training, preProcess = "pca", method="rpart", trControl=trainControl(method = "cv", number = 3))
+mdl.rpart2$results
+```
+
+The results show that pre-processing the data with principal component analysis harms the modeling. 
+
+### Try bagging 
+```{r,echo=TRUE}
+set.seed(12345)
+mdl.bag2 <- train(classe ~ ., data=training, method="treebag")
+mdl.bag2
+```
+
+Bagging substantially improves the accuracy of decision tree model. 
+
+### Try Random Forest modeling
+```{r, echo=TRUE}
+set.seed(12345)
+mdl.rf1 <- train(classe ~ ., data=training, method="rf", trControl=trainControl(method = "oob"))
+mdl.rf1
+mdl.rf1$finalModel
+```
+
+This modeling gives excellent results. Both accuracies and Kappa values are higher than 99%. Overall out of sample error rate is o.15%. Therefore, it is used to predict the classes of test dataset. 
+
+### Predict the classes of testing dataset
+```{r, echo=TRUE}
+# Delete the columns that are not used for training
+testing.n <- testing[, names(testing) %in% names(training)]
+pred.test <- predict(mdl.rf1$finalModel, newdata=testing.n)
+pred.test
+```
+
+**The accuracy of the prediction of the test dataset is 100% according to the quiz grade. **  
